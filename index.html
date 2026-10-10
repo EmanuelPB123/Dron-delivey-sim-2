@@ -132,16 +132,16 @@
       Altitud de crucero (m)
       <input id="cruiseAltitude" type="number" value="100" min="20" max="500" step="10">
     </label>
-    <div class="delivery-help-small">Perfil horizontal de velocidad (m/s). Parte de 0 en el suelo, acelera al despegar y frena hasta 0 al llegar.</div>
+    <div class="delivery-help-small">Velocidades configurables (m/s), sin tope máximo. El dron acelera al despegar y frena hasta 0 al llegar.</div>
     <div class="delivery-speed-grid">
       <label for="takeoffSpeed">Máx. despegue
-        <input id="takeoffSpeed" type="number" value="5" min="1" max="20" step="0.5">
+        <input id="takeoffSpeed" type="number" value="5" min="0" step="any">
       </label>
       <label for="cruiseSpeed">Crucero
-        <input id="cruiseSpeed" type="number" value="12" min="2" max="30" step="0.5">
+        <input id="cruiseSpeed" type="number" value="12" min="0" step="any">
       </label>
       <label for="landingSpeed">Máx. aterrizaje
-        <input id="landingSpeed" type="number" value="3" min="1" max="15" step="0.5">
+        <input id="landingSpeed" type="number" value="3" min="0" step="any">
       </label>
     </div>
     <label class="delivery-mode">
@@ -791,14 +791,10 @@
       const takeoffSpeedInput = Number(document.getElementById('takeoffSpeed').value);
       const cruiseSpeedInput = Number(document.getElementById('cruiseSpeed').value);
       const landingSpeedInput = Number(document.getElementById('landingSpeed').value);
-      if (!Number.isFinite(takeoffSpeedInput) || takeoffSpeedInput < 1 || takeoffSpeedInput > 20
-          || !Number.isFinite(cruiseSpeedInput) || cruiseSpeedInput < 2 || cruiseSpeedInput > 30
-          || !Number.isFinite(landingSpeedInput) || landingSpeedInput < 1 || landingSpeedInput > 15) {
-        deliveryStateEl.textContent = 'Velocidades inválidas; respetá los rangos indicados';
-        return;
-      }
-      if (cruiseSpeedInput <= takeoffSpeedInput || cruiseSpeedInput <= landingSpeedInput) {
-        deliveryStateEl.textContent = 'La velocidad de crucero debe superar las máximas de despegue y aterrizaje';
+      if (!Number.isFinite(takeoffSpeedInput) || takeoffSpeedInput <= 0
+          || !Number.isFinite(cruiseSpeedInput) || cruiseSpeedInput <= 0
+          || !Number.isFinite(landingSpeedInput) || landingSpeedInput <= 0) {
+        deliveryStateEl.textContent = 'Las velocidades deben ser números mayores que cero';
         return;
       }
       const from = Cesium.Cartographic.fromDegrees(deliveryHome.lon, deliveryHome.lat);
