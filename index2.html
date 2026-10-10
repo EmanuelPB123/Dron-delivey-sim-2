@@ -1,0 +1,1008 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CesiumJS con Caché Local (Service Worker)</title>
+  
+  <!-- CesiumJS CDN -->
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+    html, body, #cesiumContainer { width: 100%; height: 100%; overflow: hidden; position: relative; }
+
+    /* Panel de controles */
+    .control-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 1000;
+      background: rgba(23, 25, 35, 0.9);
+      backdrop-filter: blur(8px);
+      padding: 16px 20px;
+      border-radius: 10px;
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 260px;
+      max-width: 330px;
+      max-height: calc(100vh - 40px);
+      overflow-y: auto;
+    }
+
+    .control-panel select, .control-panel button {
+      padding: 10px 12px;
+      font-size: 14px;
+      border-radius: 6px;
+      border: 1px solid #4a5568;
+      background-color: #2d3748;
+      color: #ffffff;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .status-badge {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      background: #319795;
+      color: white;
+      text-align: center;
+    }
+
+    .delivery-divider { border: 0; border-top: 1px solid rgba(255,255,255,.14); width: 100%; }
+    .delivery-title { color: #67e8f9; font-size: 14px; letter-spacing: 1px; text-transform: uppercase; }
+    .delivery-help { color: #b8c0cc; font-size: 12px; line-height: 1.4; }
+    .delivery-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .delivery-actions button, .control-panel button.delivery-button {
+      padding: 9px 10px;
+      border: 1px solid #4a5568;
+      border-radius: 6px;
+      background: #2d3748;
+      color: #fff;
+      cursor: pointer;
+    }
+    .delivery-actions button.selected { border-color: #22d3ee; color: #67e8f9; }
+    .control-panel button.delivery-button.primary { background: #087f8c; border-color: #22d3ee; font-weight: bold; }
+    .control-panel button.delivery-button.danger { background: #7f1d1d; border-color: #ef4444; font-weight: bold; }
+    .control-panel button.delivery-button:disabled { opacity: .5; cursor: not-allowed; }
+    .delivery-altitude { display: flex; align-items: center; gap: 8px; color: #ddd; font-size: 12px; }
+    .delivery-altitude input { width: 90px; padding: 8px; border: 1px solid #4a5568; border-radius: 5px; background: #2d3748; color: white; }
+    .delivery-speed-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 7px; }
+    .delivery-speed-grid label { margin: 0; color: #cbd5e1; font-size: 10px; line-height: 1.35; }
+    .delivery-speed-grid input { width: 100%; margin-top: 5px; padding: 8px 5px; border: 1px solid #4a5568; border-radius: 5px; background: #2d3748; color: white; }
+    .delivery-help-small { color: #94a3b8; font-size: 10px; line-height: 1.35; }
+    .delivery-mode { display: flex; align-items: flex-start; gap: 8px; color: #ddd; font-size: 12px; line-height: 1.4; }
+    .delivery-mode input { margin-top: 2px; accent-color: #22d3ee; }
+    .delivery-coordinate { color: #d1d5db; font: 11px Consolas, monospace; line-height: 1.5; overflow-wrap: anywhere; }
+    .delivery-hud {
+      position: absolute; z-index: 10; right: 20px; bottom: 20px; min-width: 230px;
+      padding: 15px 18px; border: 1px solid rgba(103,232,249,.35); border-left: 4px solid #22d3ee;
+      border-radius: 9px; background: rgba(15,23,42,.9); color: #f8fafc;
+      box-shadow: 0 8px 25px rgba(0,0,0,.35); pointer-events: none;
+    }
+    .delivery-hud h2 { margin: 0 0 10px; color: #67e8f9; font-size: 13px; letter-spacing: 1px; }
+    .delivery-hud p { margin: 5px 0; font-size: 12px; }
+    .delivery-hud span { color: #67e8f9; }
+    #mapPickNotice {
+      display: none; position: absolute; z-index: 15; top: 16px; left: 50%; transform: translateX(-50%);
+      max-width: calc(100vw - 32px); padding: 11px 16px; border: 1px solid #22d3ee;
+      border-radius: 8px; background: rgba(8, 47, 60, .94); color: #ecfeff;
+      font-size: 13px; font-weight: bold; text-align: center; pointer-events: none;
+      box-shadow: 0 5px 18px rgba(0,0,0,.35);
+    }
+    #mapPickNotice.visible { display: block; }
+    .delivery-track-options { display: flex; gap: 12px; font-size: 11px; color: #ddd; }
+    .delivery-track-options label { display: flex; align-items: center; gap: 5px; }
+    .delivery-track-options input { accent-color: #22d3ee; }
+    @media (max-width: 600px) {
+      .control-panel { top: 10px; left: 10px; min-width: 0; width: min(290px, calc(100vw - 20px)); max-height: 62vh; padding: 12px; }
+      .delivery-hud { right: 10px; bottom: 10px; min-width: 0; padding: 10px 12px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="control-panel">
+    <label for="citySelect">Seleccionar Ciudad:</label>
+    <select id="citySelect">
+      <option value="" disabled selected>-- Elegí una ciudad --</option>
+      <option value="-67.4864,-45.8647,1500,45">Comodoro Rivadavia</option>
+      <option value="-58.3816,-34.6037,2000,60">Buenos Aires</option>
+      <option value="-64.1810,-31.4135,2500,50">Córdoba</option>
+      <option value="-74.0060,40.7128,2000,60">Nueva York</option>
+    </select>
+
+    <div id="cacheStatus" class="status-badge">Inicializando Caché...</div>
+    <button onclick="limpiarCache()">Borrar Caché Local</button>
+    <hr class="delivery-divider">
+    <h2 class="delivery-title">Drone delivery</h2>
+    <p class="delivery-help" id="mapPickHint">Elegí una base y un destino sobre el mapa, o seleccioná una ciudad para cargar una ruta de prueba.</p>
+    <div class="delivery-actions">
+      <button id="pickHomeBtn" type="button">Elegir base</button>
+      <button id="pickDestinationBtn" type="button">Elegir destino</button>
+    </div>
+    <div class="delivery-coordinate">Base: <span id="homeCoords">sin definir</span></div>
+    <div class="delivery-coordinate">Destino: <span id="destinationCoords">sin definir</span></div>
+    <label class="delivery-altitude" for="cruiseAltitude">
+      Altitud de crucero (m)
+      <input id="cruiseAltitude" type="number" value="100" min="20" max="500" step="10">
+    </label>
+    <div class="delivery-help-small">Perfil horizontal de velocidad (m/s). Parte de 0 en el suelo, acelera al despegar y frena hasta 0 al llegar.</div>
+    <div class="delivery-speed-grid">
+      <label for="takeoffSpeed">Máx. despegue
+        <input id="takeoffSpeed" type="number" value="5" min="1" max="20" step="0.5">
+      </label>
+      <label for="cruiseSpeed">Crucero
+        <input id="cruiseSpeed" type="number" value="12" min="2" max="30" step="0.5">
+      </label>
+      <label for="landingSpeed">Máx. aterrizaje
+        <input id="landingSpeed" type="number" value="3" min="1" max="15" step="0.5">
+      </label>
+    </div>
+    <label class="delivery-mode">
+      <input id="followTerrain" type="checkbox" checked>
+      <span id="followTerrainLabel">Seguir el terreno: mantener la altitud indicada sobre el suelo</span>
+    </label>
+    <button class="delivery-button primary" id="startDeliveryBtn" type="button" disabled>Iniciar entrega</button>
+    <button class="delivery-button danger" id="resetDroneBtn" type="button" hidden>Reiniciar dron</button>
+    <div class="delivery-track-options">
+      <label><input id="showOutbound" type="checkbox" checked> Ida</label>
+      <label><input id="showReturn" type="checkbox" checked> Regreso</label>
+    </div>
+    <button class="delivery-button" id="clearDeliveryTracksBtn" type="button">Borrar trayectorias</button>
+  </div>
+
+  <div id="cesiumContainer"></div>
+  <div id="mapPickNotice" role="status" aria-live="assertive"></div>
+  <section class="delivery-hud" aria-live="polite">
+    <h2>ESTADO DE ENTREGA</h2>
+    <p>Vuelo: <span id="deliveryState">Esperando ruta</span></p>
+    <p>Altitud: <span id="deliveryAltitude">0</span> m</p>
+    <p>Velocidad: <span id="deliverySpeed">0.0</span> m/s</p>
+    <p>Distancia: <span id="deliveryDistance">—</span></p>
+    <p>Entregas completadas: <span id="deliveryCount">0</span></p>
+    <p>Impactos: <span id="impactCount">0</span></p>
+  </section>
+
+  <script>
+    // ============================================================
+    // 1. REGISTRO DEL SERVICE WORKER (Caché de recursos de Cesium ion)
+    // ============================================================
+    const cacheStatus = document.getElementById('cacheStatus');
+    let cacheHits = 0;
+    if (!('serviceWorker' in navigator)) {
+      cacheStatus.innerText = 'Service Worker no disponible en este navegador';
+    } else if (!window.isSecureContext) {
+      cacheStatus.innerText = 'Caché requiere HTTPS o localhost';
+    } else if (!('caches' in window)) {
+      cacheStatus.innerText = 'Caché local no disponible en este navegador';
+    } else {
+      async function actualizarEstadoCache() {
+        try {
+          const cache = await caches.open('cesium-ion-assets-v2');
+          const cachedCount = (await cache.keys()).length;
+          cacheStatus.innerText =
+            `Caché activa: ${cachedCount} recursos guardados, ${cacheHits} reutilizados`;
+        } catch (error) {
+          cacheStatus.innerText = 'Error al consultar la Caché';
+          console.error('Error al consultar la caché local:', error);
+        }
+      }
+
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (
+          event.data?.type === 'CESIUM_CACHE_HIT' ||
+          event.data?.type === 'CESIUM_CACHE_STORED'
+        ) {
+          if (event.data.type === 'CESIUM_CACHE_HIT') {
+            cacheHits += 1;
+          }
+          actualizarEstadoCache();
+        }
+      });
+
+      navigator.serviceWorker.addEventListener('controllerchange', actualizarEstadoCache);
+
+      navigator.serviceWorker.register('./service-worker.js')
+        .then(() => navigator.serviceWorker.ready)
+        .then(() => {
+          if (navigator.serviceWorker.controller) {
+            actualizarEstadoCache();
+          } else {
+            cacheStatus.innerText = 'Service Worker listo; activando caché...';
+          }
+        })
+        .catch(error => {
+          cacheStatus.innerText = 'Error en Caché';
+          console.error('Error al registrar Service Worker:', error);
+        });
+    }
+
+    // Función para vaciar la memoria local guardada
+    async function limpiarCache() {
+      if (!('caches' in window)) {
+        alert('La caché local no está disponible en este navegador.');
+        return;
+      }
+
+      try {
+        const deleted = await caches.delete('cesium-ion-assets-v2');
+        cacheHits = 0;
+        alert(deleted
+          ? 'Caché local eliminada. Las próximas peticiones descargarán de nuevo.'
+          : 'No había recursos guardados en la caché.');
+        cacheStatus.innerText = 'Caché activa: 0 recursos guardados, 0 reutilizados';
+      } catch (error) {
+        console.error('Error al borrar la caché local:', error);
+        alert('No se pudo borrar la caché local. Revisá la consola para más detalles.');
+      }
+    }
+
+    // ============================================================
+    // 2. CONFIGURACIÓN Y MAPA EN CESIUMJS
+    // ============================================================
+    
+    // !!! PONÉ TU TOKEN AQUÍ !!!
+    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjZ3X0ZPRUxMVHNYMU04QkgiLCJqdGkiOiI5OGExODM1Yi05ZTA1LTRhYTMtYjRjOC01NDU5NWM0MmEyNWUiLCJpZCI6Mzc0NDM2LCJzdWIiOiJFbWFudWVsIFBCIiwiaXNzIjoiaHR0cHM6Ly9hcGkuY2VzaXVtLmNvbSIsImF1ZCI6IkVtYW51ZWwgUEJfZGVmYXVsdCIsImlhdCI6MTc5MTMyNjA3OH0.tZAiDSvXJlSqx1tvI3Xxjc_eeHcEdKxjTNJoXoBqdFc';
+
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      terrain: Cesium.Terrain.fromWorldTerrain(),
+      animation: false,
+      timeline: false,
+      baseLayerPicker: true
+    });
+
+    // Cargar Edificios 3D OSM
+    async function init3DBuildings() {
+      try {
+        const buildingTileset = await Cesium.Cesium3DTileset.fromIonAssetId(96188);
+        viewer.scene.primitives.add(buildingTileset);
+      } catch (error) {
+        console.warn('Para ver edificios 3D ingresá un Token válido de Cesium ion arriba.');
+      }
+    }
+    init3DBuildings();
+
+    // Vuelo de cámara
+    function flyToCity(lon, lat, height = 2000, pitchDegree = 45) {
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
+        orientation: {
+          heading: Cesium.Math.toRadians(0),
+          pitch: Cesium.Math.toRadians(-pitchDegree),
+          roll: 0.0
+        },
+        duration: 2.5
+      });
+    }
+
+    document.getElementById('citySelect').addEventListener('change', (e) => {
+      const [lon, lat, height, pitch] = e.target.value.split(',').map(Number);
+      flyToCity(lon, lat, height, pitch);
+      setDeliveryCity(lon, lat);
+    });
+
+    // ============================================================
+    // 3. SIMULACIÓN DE ENTREGA INTEGRADA EN EL GLOBO CESIUM
+    // ============================================================
+    const deliveryStateEl = document.getElementById('deliveryState');
+    const deliveryAltitudeEl = document.getElementById('deliveryAltitude');
+    const deliverySpeedEl = document.getElementById('deliverySpeed');
+    const deliveryDistanceEl = document.getElementById('deliveryDistance');
+    const deliveryCountEl = document.getElementById('deliveryCount');
+    const impactCountEl = document.getElementById('impactCount');
+    const startDeliveryBtn = document.getElementById('startDeliveryBtn');
+    const resetDroneBtn = document.getElementById('resetDroneBtn');
+    const followTerrainInput = document.getElementById('followTerrain');
+    const followTerrainLabel = document.getElementById('followTerrainLabel');
+    const flightSettingInputs = [
+      document.getElementById('cruiseAltitude'),
+      document.getElementById('takeoffSpeed'),
+      document.getElementById('cruiseSpeed'),
+      document.getElementById('landingSpeed'),
+      followTerrainInput
+    ];
+    const homeCoordsEl = document.getElementById('homeCoords');
+    const destinationCoordsEl = document.getElementById('destinationCoords');
+    const mapPickHint = document.getElementById('mapPickHint');
+    const mapPickNotice = document.getElementById('mapPickNotice');
+
+    let deliveryHome = null;
+    let deliveryDestination = null;
+    let mapPickMode = null;
+    let routePreparing = false;
+    let routeSetupId = 0;
+    let deliveryPhase = 'IDLE';
+    let phaseElapsed = 0;
+    let lastFrameTime = null;
+    let deliveryAltitudeMeters = 100;
+    let takeoffSpeedMax = 5;
+    let cruiseSpeed = 12;
+    let landingSpeedMax = 3;
+    let currentHorizontalSpeed = 0;
+    let legDistance = 0;
+    let legProgress = 0;
+    let deliveryDistanceMeters = 0;
+    let deliveryCount = 0;
+    let impactCount = 0;
+    let followTerrain = true;
+    let terrainProfile = [];
+    let dronePosition = null;
+    let droneHeading = 0;
+    let outboundTrack = null;
+    let returnTrack = null;
+    const droneParts = [];
+
+    const droneEntity = viewer.entities.add({
+      id: 'delivery-drone',
+      position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
+      point: {
+        pixelSize: 13,
+        color: Cesium.Color.CYAN,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY
+      },
+      label: {
+        text: 'DRON',
+        font: 'bold 12px Arial',
+        pixelOffset: new Cesium.Cartesian2(0, -22),
+        fillColor: Cesium.Color.WHITE,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY
+      },
+      show: false
+    });
+
+    const destinationMarker = viewer.entities.add({
+      id: 'delivery-destination',
+      position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
+      point: {
+        pixelSize: 11,
+        color: Cesium.Color.LIME,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2
+      },
+      label: {
+        text: 'DESTINO',
+        font: 'bold 11px Arial',
+        pixelOffset: new Cesium.Cartesian2(0, -20),
+        fillColor: Cesium.Color.LIME,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 3,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE
+      },
+      show: false
+    });
+
+    function formatCoordinates(point) {
+      return `${point.lon.toFixed(5)}, ${point.lat.toFixed(5)}`;
+    }
+
+    async function sampleTerrainOrFallback(points, fallbackHeights, context) {
+      try {
+        const sampledPoints = await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, points);
+        if (sampledPoints.length !== points.length
+            || sampledPoints.some((point) => !Number.isFinite(point.height))) {
+          throw new Error('El proveedor devolvió elevaciones de terreno inválidas.');
+        }
+        return { points: sampledPoints, usedFallback: false };
+      } catch (error) {
+        console.warn(`No se pudo consultar el terreno (${context}); se usará una elevación aproximada.`, error);
+        return {
+          points: points.map((point, index) => new Cesium.Cartographic(
+            point.longitude,
+            point.latitude,
+            fallbackHeights[index] ?? 0
+          )),
+          usedFallback: true
+        };
+      }
+    }
+
+    function refreshDeliveryControls() {
+      homeCoordsEl.textContent = deliveryHome ? formatCoordinates(deliveryHome) : 'sin definir';
+      destinationCoordsEl.textContent = deliveryDestination
+        ? formatCoordinates(deliveryDestination)
+        : 'sin definir';
+      startDeliveryBtn.disabled = deliveryPhase !== 'IDLE' || routePreparing || !deliveryHome || !deliveryDestination;
+      flightSettingInputs.forEach((input) => {
+        input.disabled = deliveryPhase !== 'IDLE' || routePreparing;
+      });
+    }
+
+    function setDeliveryCity(lon, lat) {
+      const setupId = ++routeSetupId;
+      const eastOffset = 0.006 / Math.max(0.2, Math.cos(Cesium.Math.toRadians(lat)));
+      deliveryHome = { lon, lat, height: 0 };
+      deliveryDestination = { lon: lon + eastOffset, lat: lat + 0.004, height: 0 };
+      updateRouteMarkers();
+      routePreparing = true;
+      deliveryStateEl.textContent = 'Consultando elevación del terreno';
+      refreshDeliveryControls();
+      const terrainPoints = [
+        Cesium.Cartographic.fromDegrees(deliveryHome.lon, deliveryHome.lat),
+        Cesium.Cartographic.fromDegrees(deliveryDestination.lon, deliveryDestination.lat)
+      ];
+      sampleTerrainOrFallback(terrainPoints, [0, 0], 'ruta de prueba').then(({ points, usedFallback }) => {
+        if (setupId !== routeSetupId) return;
+        deliveryHome.height = points[0].height;
+        deliveryDestination.height = points[1].height;
+        routePreparing = false;
+        updateRouteMarkers();
+        deliveryStateEl.textContent = usedFallback
+          ? 'Ruta lista; elevación aproximada'
+          : 'Ruta de prueba lista';
+        mapPickHint.textContent = usedFallback
+          ? 'No se pudo consultar el terreno. La ruta se cargó con elevación aproximada; verificá el token de Cesium ion para mayor precisión.'
+          : 'Ruta de prueba cargada para la ciudad seleccionada; también podés ajustar los puntos sobre el mapa.';
+        refreshDeliveryControls();
+      }).catch((error) => {
+        if (setupId !== routeSetupId) return;
+        console.error('No se pudo preparar la ruta de prueba:', error);
+        routePreparing = false;
+        deliveryHome = null;
+        deliveryDestination = null;
+        updateRouteMarkers();
+        deliveryStateEl.textContent = 'No se pudo preparar la ruta';
+        mapPickHint.textContent = 'No se pudo preparar la ruta. Elegí la base y el destino directamente sobre el mapa.';
+        refreshDeliveryControls();
+      });
+      refreshDeliveryControls();
+    }
+
+    function updateRouteMarkers() {
+      if (deliveryHome) {
+        viewer.entities.removeById('delivery-home');
+        viewer.entities.add({
+          id: 'delivery-home',
+          position: Cesium.Cartesian3.fromDegrees(deliveryHome.lon, deliveryHome.lat, deliveryHome.height),
+          point: { pixelSize: 10, color: Cesium.Color.fromCssColorString('#38bdf8'), outlineColor: Cesium.Color.BLACK, outlineWidth: 2 },
+          label: {
+            text: 'BASE',
+            font: 'bold 11px Arial',
+            pixelOffset: new Cesium.Cartesian2(0, -19),
+            fillColor: Cesium.Color.fromCssColorString('#7dd3fc'),
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE
+          }
+        });
+      } else {
+        viewer.entities.removeById('delivery-home');
+      }
+      if (deliveryDestination) {
+        destinationMarker.position = Cesium.Cartesian3.fromDegrees(
+          deliveryDestination.lon, deliveryDestination.lat, deliveryDestination.height
+        );
+        destinationMarker.show = true;
+      } else {
+        destinationMarker.show = false;
+      }
+    }
+
+    document.getElementById('pickHomeBtn').addEventListener('click', () => {
+      mapPickMode = 'HOME';
+      document.getElementById('pickHomeBtn').classList.add('selected');
+      document.getElementById('pickDestinationBtn').classList.remove('selected');
+      showMapPickPrompt('BASE', 'Hacé clic en una ubicación del mapa para fijar la base.');
+    });
+    document.getElementById('pickDestinationBtn').addEventListener('click', () => {
+      mapPickMode = 'DESTINATION';
+      document.getElementById('pickDestinationBtn').classList.add('selected');
+      document.getElementById('pickHomeBtn').classList.remove('selected');
+      showMapPickPrompt('DESTINO', 'Hacé clic en una ubicación del mapa para fijar la entrega.');
+    });
+
+    function showMapPickPrompt(pointName, instruction) {
+      mapPickNotice.textContent = `SELECCIONANDO ${pointName} — ${instruction} (Esc para cancelar)`;
+      mapPickNotice.classList.add('visible');
+      viewer.scene.canvas.style.cursor = 'crosshair';
+      mapPickHint.textContent = instruction;
+    }
+
+    function cancelMapPick() {
+      mapPickMode = null;
+      mapPickNotice.classList.remove('visible');
+      viewer.scene.canvas.style.cursor = '';
+      document.getElementById('pickHomeBtn').classList.remove('selected');
+      document.getElementById('pickDestinationBtn').classList.remove('selected');
+      mapPickHint.textContent = 'Selección cancelada. Elegí base o destino y después hacé clic en el mapa.';
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && mapPickMode) cancelMapPick();
+    });
+
+    const mapPicker = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+    mapPicker.setInputAction((event) => {
+      if (!mapPickMode || deliveryPhase !== 'IDLE') return;
+      let cartesian = viewer.scene.pickPositionSupported
+        ? viewer.scene.pickPosition(event.position)
+        : undefined;
+      if (!Cesium.defined(cartesian)) {
+        const ray = viewer.camera.getPickRay(event.position);
+        cartesian = (ray && viewer.scene.globe.pick(ray, viewer.scene))
+          || viewer.camera.pickEllipsoid(event.position, viewer.scene.globe.ellipsoid);
+      }
+      if (!cartesian) {
+        mapPickHint.textContent = 'No se pudo elegir ese punto. Hacé clic sobre el globo.';
+        mapPickNotice.textContent = 'No se detectó una superficie. Hacé clic sobre el globo para elegir el punto.';
+        return;
+      }
+      routeSetupId += 1;
+      routePreparing = false;
+      const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
+      const selectedPoint = {
+        lon: Cesium.Math.toDegrees(cartographic.longitude),
+        lat: Cesium.Math.toDegrees(cartographic.latitude),
+        height: 0
+      };
+      const selectedMode = mapPickMode;
+      mapPickMode = null;
+      mapPickNotice.classList.remove('visible');
+      viewer.scene.canvas.style.cursor = '';
+      document.getElementById('pickHomeBtn').classList.remove('selected');
+      document.getElementById('pickDestinationBtn').classList.remove('selected');
+      const setupId = ++routeSetupId;
+      routePreparing = true;
+      deliveryStateEl.textContent = 'Consultando elevación real del terreno';
+      mapPickHint.textContent = 'Consultando elevación del terreno en el punto elegido…';
+      refreshDeliveryControls();
+      const terrainPoint = Cesium.Cartographic.fromDegrees(selectedPoint.lon, selectedPoint.lat);
+      sampleTerrainOrFallback([terrainPoint], [selectedPoint.height], 'punto seleccionado').then(({ points, usedFallback }) => {
+        if (setupId !== routeSetupId) return;
+        selectedPoint.height = points[0].height;
+        if (selectedMode === 'HOME') deliveryHome = selectedPoint;
+        else deliveryDestination = selectedPoint;
+        routePreparing = false;
+        mapPickHint.textContent = usedFallback
+          ? `${selectedMode === 'HOME' ? 'Base' : 'Destino'} actualizado con elevación aproximada. Verificá el token de Cesium ion para mayor precisión.`
+          : `${selectedMode === 'HOME' ? 'Base' : 'Destino'} actualizado. Elegí el otro punto o iniciá el vuelo.`;
+        updateRouteMarkers();
+        refreshDeliveryControls();
+        deliveryStateEl.textContent = usedFallback ? 'Ruta lista; elevación aproximada' : 'Ruta lista';
+      }).catch((error) => {
+        if (setupId !== routeSetupId) return;
+        console.error('No se pudo preparar el punto seleccionado:', error);
+        routePreparing = false;
+        mapPickHint.textContent = 'No se pudo preparar el punto; intentá elegirlo de nuevo.';
+        deliveryStateEl.textContent = 'Error preparando punto';
+        refreshDeliveryControls();
+      });
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    function routePosition(start, end, fraction, height, sampledGroundHeight) {
+      const startCartographic = Cesium.Cartographic.fromDegrees(start.lon, start.lat, start.height);
+      const endCartographic = Cesium.Cartographic.fromDegrees(end.lon, end.lat, end.height);
+      const geodesic = new Cesium.EllipsoidGeodesic(startCartographic, endCartographic);
+      const surfacePoint = geodesic.interpolateUsingFraction(
+        Cesium.Math.clamp(fraction, 0, 1), new Cesium.Cartographic()
+      );
+      const groundHeight = Number.isFinite(sampledGroundHeight)
+        ? sampledGroundHeight
+        : Cesium.Math.lerp(start.height, end.height, Cesium.Math.clamp(fraction, 0, 1));
+      surfacePoint.height = followTerrain ? groundHeight + height : height;
+      return {
+        position: Cesium.Cartesian3.fromRadians(
+          surfacePoint.longitude, surfacePoint.latitude, surfacePoint.height
+        ),
+        heading: geodesic.surfaceDistance > 0.01 ? geodesic.startHeading : droneHeading,
+        groundHeight
+      };
+    }
+
+    function groundHeightAt(fraction, returning = false) {
+      if (terrainProfile.length === 0) {
+        return Cesium.Math.lerp(deliveryHome.height, deliveryDestination.height, fraction);
+      }
+      const profileFraction = returning ? 1 - fraction : fraction;
+      const scaled = Cesium.Math.clamp(profileFraction, 0, 1) * (terrainProfile.length - 1);
+      const lowerIndex = Math.floor(scaled);
+      const upperIndex = Math.min(lowerIndex + 1, terrainProfile.length - 1);
+      return Cesium.Math.lerp(
+        terrainProfile[lowerIndex].height,
+        terrainProfile[upperIndex].height,
+        scaled - lowerIndex
+      );
+    }
+
+    function speedLimitAt(fraction) {
+      const stages = [
+        { fraction: 0, speed: takeoffSpeedMax },
+        { fraction: 0.12, speed: takeoffSpeedMax },
+        { fraction: 0.30, speed: cruiseSpeed },
+        { fraction: 0.68, speed: cruiseSpeed },
+        { fraction: 0.90, speed: landingSpeedMax },
+        { fraction: 1, speed: 0 }
+      ];
+      for (let index = 1; index < stages.length; index += 1) {
+        const previous = stages[index - 1];
+        const next = stages[index];
+        if (fraction <= next.fraction) {
+          const span = next.fraction - previous.fraction;
+          const progress = span > 0 ? (fraction - previous.fraction) / span : 1;
+          return Cesium.Math.lerp(previous.speed, next.speed, progress);
+        }
+      }
+      return 0;
+    }
+
+    function advanceFlightLeg(delta, returning) {
+      const remainingDistance = Math.max(0, legDistance * (1 - legProgress));
+      const profileLimit = speedLimitAt(legProgress);
+      const brakingLimit = Math.sqrt(2 * 3.5 * remainingDistance);
+      const targetSpeed = Math.min(profileLimit, brakingLimit);
+      const previousSpeed = currentHorizontalSpeed;
+      const acceleration = targetSpeed >= previousSpeed ? 1.8 : 3.5;
+      const speedChange = acceleration * delta;
+      currentHorizontalSpeed = targetSpeed >= previousSpeed
+        ? Math.min(targetSpeed, previousSpeed + speedChange)
+        : Math.max(targetSpeed, previousSpeed - speedChange);
+      const distanceStep = (previousSpeed + currentHorizontalSpeed) * 0.5 * delta;
+      const nextDistance = legDistance * legProgress + distanceStep;
+      const distanceToArrival = Math.max(0, legDistance - nextDistance);
+      if (distanceToArrival <= 0.25) {
+        legProgress = 1;
+        currentHorizontalSpeed = 0;
+      } else {
+        legProgress = Math.min(1, nextDistance / legDistance);
+        currentHorizontalSpeed = Math.min(
+          currentHorizontalSpeed,
+          speedLimitAt(legProgress),
+          Math.sqrt(2 * 3.5 * distanceToArrival)
+        );
+      }
+      deliverySpeedEl.textContent = currentHorizontalSpeed.toFixed(1);
+
+      const start = returning ? deliveryDestination : deliveryHome;
+      const end = returning ? deliveryHome : deliveryDestination;
+      const groundHeight = groundHeightAt(legProgress, returning);
+      return {
+        progress: legProgress,
+        sample: routePosition(start, end, legProgress, deliveryAltitudeMeters, groundHeight)
+      };
+    }
+
+    function createTrack(start, end, color, height, returning = false) {
+      const positions = [];
+      const from = Cesium.Cartographic.fromDegrees(start.lon, start.lat);
+      const to = Cesium.Cartographic.fromDegrees(end.lon, end.lat);
+      const geodesic = new Cesium.EllipsoidGeodesic(from, to);
+      for (let i = 0; i <= 48; i++) {
+        const fraction = i / 48;
+        const point = geodesic.interpolateUsingFraction(fraction, new Cesium.Cartographic());
+        const groundHeight = groundHeightAt(fraction, returning);
+        const trackHeight = followTerrain ? groundHeight + height : height;
+        positions.push(Cesium.Cartesian3.fromRadians(point.longitude, point.latitude, trackHeight));
+      }
+      return viewer.entities.add({
+        polyline: {
+          positions,
+          width: 4,
+          material: color,
+          clampToGround: false
+        }
+      });
+    }
+
+    function localDronePoint(x, y, z) {
+      if (!dronePosition) return Cesium.Cartesian3.ZERO;
+      const c = Math.cos(droneHeading);
+      const s = Math.sin(droneHeading);
+      const east = x * c + z * s;
+      const north = -x * s + z * c;
+      const frame = Cesium.Transforms.eastNorthUpToFixedFrame(dronePosition);
+      return Cesium.Matrix4.multiplyByPoint(
+        frame,
+        new Cesium.Cartesian3(east, north, y),
+        new Cesium.Cartesian3()
+      );
+    }
+
+    function addDroneVisuals() {
+      const armPairs = [
+        [[-3, 0, -3], [3, 0, 3]],
+        [[-3, 0, 3], [3, 0, -3]]
+      ];
+      armPairs.forEach((pair, index) => {
+        const arm = viewer.entities.add({
+          show: false,
+          polyline: {
+            positions: new Cesium.CallbackProperty(() => pair.map(point =>
+              localDronePoint(point[0], point[1], point[2])
+            ), false),
+            width: 5,
+            material: index === 0 ? Cesium.Color.DARKSLATEGRAY : Cesium.Color.GRAY
+          }
+        });
+        droneParts.push(arm);
+      });
+      [[-3, -3], [-3, 3], [3, -3], [3, 3]].forEach((point, index) => {
+        const rotor = viewer.entities.add({
+          show: false,
+          position: new Cesium.CallbackProperty(() => localDronePoint(point[0], 0.3, point[1]), false),
+          point: {
+            pixelSize: 8,
+            color: index === 0 || index === 3 ? Cesium.Color.ORANGERED : Cesium.Color.CYAN,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 1
+          }
+        });
+        droneParts.push(rotor);
+      });
+    }
+    addDroneVisuals();
+
+    function setDeliveryPhase(phase, label) {
+      deliveryPhase = phase;
+      phaseElapsed = 0;
+      deliveryStateEl.textContent = label;
+      resetDroneBtn.hidden = phase !== 'CRASHED';
+      refreshDeliveryControls();
+    }
+
+    followTerrainInput.addEventListener('change', () => {
+      followTerrainLabel.textContent = followTerrainInput.checked
+        ? 'Seguir el terreno: mantener la altitud indicada sobre el suelo'
+        : 'Altitud absoluta de Cesium: el dron puede impactar el terreno';
+    });
+
+    function registerGroundImpact(position) {
+      dronePosition = position;
+      droneEntity.position = position;
+      droneEntity.point.color = Cesium.Color.RED;
+      droneEntity.label.text = 'IMPACTO';
+      droneEntity.show = true;
+      droneParts.forEach((part) => { part.show = true; });
+      impactCount += 1;
+      impactCountEl.textContent = impactCount;
+      setDeliveryPhase('CRASHED', 'IMPACTO CON EL SUELO — vuelo detenido');
+    }
+
+    resetDroneBtn.addEventListener('click', () => {
+      if (deliveryPhase !== 'CRASHED') return;
+      droneEntity.show = false;
+      droneParts.forEach((part) => { part.show = false; });
+      droneEntity.point.color = Cesium.Color.CYAN;
+      droneEntity.label.text = 'DRON';
+      destinationMarker.point.color = Cesium.Color.LIME;
+      deliveryAltitudeEl.textContent = '0';
+      currentHorizontalSpeed = 0;
+      deliverySpeedEl.textContent = '0.0';
+      deliveryDistanceEl.textContent = '—';
+      setDeliveryPhase('IDLE', 'Dron reiniciado; listo para otra misión');
+    });
+
+    async function startDelivery() {
+      if (!deliveryHome || !deliveryDestination || deliveryPhase !== 'IDLE') return;
+      const altitudeInput = Number(document.getElementById('cruiseAltitude').value);
+      if (!Number.isFinite(altitudeInput) || altitudeInput < 20 || altitudeInput > 500) {
+        deliveryStateEl.textContent = 'Altitud inválida (20–500 m)';
+        return;
+      }
+      const takeoffSpeedInput = Number(document.getElementById('takeoffSpeed').value);
+      const cruiseSpeedInput = Number(document.getElementById('cruiseSpeed').value);
+      const landingSpeedInput = Number(document.getElementById('landingSpeed').value);
+      if (!Number.isFinite(takeoffSpeedInput) || takeoffSpeedInput < 1 || takeoffSpeedInput > 20
+          || !Number.isFinite(cruiseSpeedInput) || cruiseSpeedInput < 2 || cruiseSpeedInput > 30
+          || !Number.isFinite(landingSpeedInput) || landingSpeedInput < 1 || landingSpeedInput > 15) {
+        deliveryStateEl.textContent = 'Velocidades inválidas; respetá los rangos indicados';
+        return;
+      }
+      if (cruiseSpeedInput <= takeoffSpeedInput || cruiseSpeedInput <= landingSpeedInput) {
+        deliveryStateEl.textContent = 'La velocidad de crucero debe superar las máximas de despegue y aterrizaje';
+        return;
+      }
+      const from = Cesium.Cartographic.fromDegrees(deliveryHome.lon, deliveryHome.lat);
+      const to = Cesium.Cartographic.fromDegrees(deliveryDestination.lon, deliveryDestination.lat);
+      const geodesic = new Cesium.EllipsoidGeodesic(from, to);
+      deliveryDistanceMeters = geodesic.surfaceDistance;
+      if (deliveryDistanceMeters < 20) {
+        deliveryStateEl.textContent = 'La base y el destino deben estar separados por al menos 20 m';
+        return;
+      }
+
+      deliveryAltitudeMeters = altitudeInput;
+      takeoffSpeedMax = takeoffSpeedInput;
+      cruiseSpeed = cruiseSpeedInput;
+      landingSpeedMax = landingSpeedInput;
+      followTerrain = document.getElementById('followTerrain').checked;
+      const setupId = ++routeSetupId;
+      routePreparing = true;
+      refreshDeliveryControls();
+      deliveryStateEl.textContent = 'Preparando perfil topográfico';
+      try {
+        const sampleCount = Math.max(32, Math.min(512, Math.ceil(deliveryDistanceMeters / 40) + 1));
+        const routeGeodesic = new Cesium.EllipsoidGeodesic(from, to);
+        const terrainPoints = Array.from({ length: sampleCount }, (_, index) =>
+          routeGeodesic.interpolateUsingFraction(index / (sampleCount - 1), new Cesium.Cartographic())
+        );
+        const fallbackHeights = terrainPoints.map((_, index) => Cesium.Math.lerp(
+          deliveryHome.height,
+          deliveryDestination.height,
+          index / (sampleCount - 1)
+        ));
+        const terrainResult = await sampleTerrainOrFallback(
+          terrainPoints,
+          fallbackHeights,
+          'perfil topográfico de la ruta'
+        );
+        if (setupId !== routeSetupId) return;
+        terrainProfile = terrainResult.points;
+        deliveryHome.height = terrainProfile[0].height;
+        deliveryDestination.height = terrainProfile[terrainProfile.length - 1].height;
+        updateRouteMarkers();
+        if (terrainResult.usedFallback) {
+          mapPickHint.textContent = 'Vuelo con elevación aproximada porque no se pudo consultar el terreno. Verificá el token de Cesium ion para mayor precisión.';
+        }
+      } catch (error) {
+        if (setupId !== routeSetupId) return;
+        console.error('No se pudo preparar el perfil topográfico de la ruta:', error);
+        routePreparing = false;
+        deliveryStateEl.textContent = 'Error cargando topografía; revisá conexión/terreno';
+        refreshDeliveryControls();
+        return;
+      }
+      routePreparing = false;
+      const baseGround = deliveryHome.height;
+      if (!followTerrain && deliveryAltitudeMeters <= baseGround + 2) {
+        deliveryStateEl.textContent = 'Altitud absoluta menor que el terreno de la base';
+        mapPickHint.textContent = `Con seguimiento desactivado, la altitud es absoluta según Cesium. La base está a ${baseGround.toFixed(0)} m; aumentá la altitud o activá Seguir el terreno.`;
+        refreshDeliveryControls();
+        return;
+      }
+      const cruiseHeight = followTerrain
+        ? Math.max(deliveryHome.height, deliveryDestination.height) + deliveryAltitudeMeters
+        : deliveryAltitudeMeters;
+      if (outboundTrack) viewer.entities.remove(outboundTrack);
+      if (returnTrack) viewer.entities.remove(returnTrack);
+      outboundTrack = createTrack(deliveryHome, deliveryDestination, Cesium.Color.CYAN, deliveryAltitudeMeters);
+      returnTrack = createTrack(deliveryDestination, deliveryHome, Cesium.Color.ORANGE, deliveryAltitudeMeters, true);
+      outboundTrack.show = document.getElementById('showOutbound').checked;
+      returnTrack.show = document.getElementById('showReturn').checked;
+      legDistance = deliveryDistanceMeters;
+      legProgress = 0;
+      currentHorizontalSpeed = 0;
+      deliverySpeedEl.textContent = '0.0';
+      dronePosition = Cesium.Cartesian3.fromDegrees(
+        deliveryHome.lon, deliveryHome.lat, deliveryHome.height
+      );
+      droneEntity.position = dronePosition;
+      droneParts.forEach((part) => { part.show = true; });
+      droneEntity.show = true;
+      destinationMarker.point.color = Cesium.Color.LIME;
+      deliveryDistanceEl.textContent = `${Math.round(deliveryDistanceMeters)} m`;
+      setDeliveryPhase('TAKEOFF', 'Despegando');
+      viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(
+          deliveryHome.lon, deliveryHome.lat, cruiseHeight + 250
+        ),
+        orientation: {
+          heading: 0,
+          pitch: Cesium.Math.toRadians(-65),
+          roll: 0
+        },
+        duration: 2
+      });
+    }
+    startDeliveryBtn.addEventListener('click', startDelivery);
+
+    document.getElementById('showOutbound').addEventListener('change', (event) => {
+      if (outboundTrack) outboundTrack.show = event.target.checked;
+    });
+    document.getElementById('showReturn').addEventListener('change', (event) => {
+      if (returnTrack) returnTrack.show = event.target.checked;
+    });
+    document.getElementById('clearDeliveryTracksBtn').addEventListener('click', () => {
+      if (deliveryPhase !== 'IDLE' && deliveryPhase !== 'CRASHED') return;
+      if (outboundTrack) viewer.entities.remove(outboundTrack);
+      if (returnTrack) viewer.entities.remove(returnTrack);
+      outboundTrack = null;
+      returnTrack = null;
+    });
+
+    function updateDronePosition(position, heading, groundHeight) {
+      dronePosition = position;
+      droneHeading = heading;
+      droneEntity.position = position;
+      const cartographic = Cesium.Cartographic.fromCartesian(position);
+      deliveryAltitudeEl.textContent = Math.max(0, cartographic.height - groundHeight).toFixed(0);
+    }
+
+    viewer.scene.preRender.addEventListener(() => {
+      const now = performance.now();
+      if (deliveryPhase === 'IDLE' || deliveryPhase === 'CRASHED') {
+        lastFrameTime = now;
+        return;
+      }
+      const delta = lastFrameTime
+        ? Cesium.Math.clamp((now - lastFrameTime) / 1000, 0, 0.15)
+        : 0;
+      lastFrameTime = now;
+      phaseElapsed += delta;
+
+      let sample;
+      let terrainFraction = 0;
+      let returning = false;
+
+      if (deliveryPhase === 'TAKEOFF') {
+        const progress = Cesium.Math.clamp(phaseElapsed / 3, 0, 1);
+        currentHorizontalSpeed = 0;
+        deliverySpeedEl.textContent = '0.0';
+        terrainFraction = 0;
+        const baseHeight = groundHeightAt(0);
+        const takeoffHeight = followTerrain
+          ? deliveryAltitudeMeters * progress
+          : baseHeight + (deliveryAltitudeMeters - baseHeight) * progress;
+        sample = routePosition(deliveryHome, deliveryHome, 0, takeoffHeight, baseHeight);
+        if (progress >= 1) setDeliveryPhase('OUTBOUND', 'En camino al destino');
+      } else if (deliveryPhase === 'OUTBOUND') {
+        const leg = advanceFlightLeg(delta, false);
+        terrainFraction = leg.progress;
+        sample = leg.sample;
+        if (leg.progress >= 1) {
+          destinationMarker.point.color = Cesium.Color.ORANGE;
+          setDeliveryPhase('DELIVERING', 'Paquete entregado');
+        }
+      } else if (deliveryPhase === 'DELIVERING') {
+        currentHorizontalSpeed = 0;
+        deliverySpeedEl.textContent = '0.0';
+        terrainFraction = 1;
+        sample = routePosition(deliveryHome, deliveryDestination, 1, deliveryAltitudeMeters, groundHeightAt(1));
+        if (phaseElapsed >= 2) {
+          legProgress = 0;
+          legDistance = deliveryDistanceMeters;
+          currentHorizontalSpeed = 0;
+          setDeliveryPhase('RETURNING', 'Regresando a la base');
+        }
+      } else if (deliveryPhase === 'RETURNING') {
+        const leg = advanceFlightLeg(delta, true);
+        terrainFraction = leg.progress;
+        returning = true;
+        sample = leg.sample;
+        if (leg.progress >= 1) setDeliveryPhase('LANDING', 'Aterrizando');
+      } else if (deliveryPhase === 'LANDING') {
+        const progress = Cesium.Math.clamp(phaseElapsed / 3, 0, 1);
+        currentHorizontalSpeed = 0;
+        deliverySpeedEl.textContent = '0.0';
+        terrainFraction = 0;
+        const baseHeight = groundHeightAt(0);
+        const landingHeight = followTerrain
+          ? deliveryAltitudeMeters * (1 - progress)
+          : baseHeight + (deliveryAltitudeMeters - baseHeight) * (1 - progress);
+        sample = routePosition(deliveryHome, deliveryHome, 0, landingHeight, baseHeight);
+        if (progress >= 1) {
+          sample = routePosition(deliveryHome, deliveryHome, 0, 0, groundHeightAt(0));
+          deliveryCount += 1;
+          deliveryCountEl.textContent = deliveryCount;
+          droneEntity.show = false;
+          droneParts.forEach((part) => { part.show = false; });
+          destinationMarker.point.color = Cesium.Color.LIME;
+          setDeliveryPhase('IDLE', 'Entrega completada');
+        }
+      }
+
+      if (sample) {
+        updateDronePosition(sample.position, sample.heading, sample.groundHeight);
+        if (deliveryPhase === 'OUTBOUND' || deliveryPhase === 'DELIVERING' || deliveryPhase === 'RETURNING') {
+          const currentCartographic = Cesium.Cartographic.fromCartesian(sample.position);
+          const sampledGround = groundHeightAt(terrainFraction, returning);
+          const actualGround = viewer.scene.globe.getHeight(currentCartographic);
+          const collisionGround = Number.isFinite(actualGround) ? Math.max(sampledGround, actualGround) : sampledGround;
+          if (currentCartographic.height <= collisionGround + 1.5) {
+            registerGroundImpact(sample.position);
+          }
+        }
+      }
+    });
+  </script>
+</body>
+</html>
